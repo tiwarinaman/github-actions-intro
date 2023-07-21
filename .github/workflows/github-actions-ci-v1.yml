@@ -1,0 +1,80 @@
+name: GitHub Actions CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+env:
+  MAVEN_OPTS: "-Dmaven.repo.local=$HOME/.m2/repository"
+  FROM_EMAIL: "onboarding.automator@gmail.com"
+  TO_EMAIL: "namant762@gmail.com"
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Cache Maven dependencies
+        uses: actions/cache@v2
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: ${{ runner.os }}-maven-
+
+      - name: Set Maven local repository directory
+        run: export MAVEN_OPTS="-Dmaven.repo.local=$HOME/.m2/repository"
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v2
+        with:
+          java-version: 17
+          distribution: 'temurin'
+
+      - name: Build with Maven
+        run: mvn -B -Dmaven.compiler.useIncrementalCompilation=true clean package
+
+      - name: Run JUnit tests and calculate code coverage
+        run: |
+          mvn -B -Dmaven.compiler.useIncrementalCompilation=true test jacoco:report
+          bash <(curl -s https://codecov.io/bash) -f target/site/jacoco/jacoco.xml
+
+      - name: Scan dependencies for vulnerabilities
+        uses: dependency-check/Dependency-Check_Action@main
+        env:
+          JAVA_HOME: /opt/jdk
+        with:
+          project: 'github-actions-intro'
+          path: '.'
+          format: 'HTML'
+          args: >
+            --failOnCVSS 8
+            --enableRetired
+
+      - name: Upload Test results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@master
+        with:
+          name: Depcheck report
+          path: ${{github.workspace}}/reports
+
+      - name: Send email notification on test failure or dependency vulnerabilities
+        if: ${{ failure() || steps.scan.outputs.has_vulnerabilities == 'true' }}
+        uses: dawidd6/action-send-mail@v2
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          username: ${{ secrets.EMAIL_USERNAME }}
+          password: ${{ secrets.EMAIL_PASSWORD }}
+          subject: JUnit tests failed or dependencies have vulnerabilities for Onboarding Automator Services project
+          body: |
+            JUnit tests failed or dependencies have vulnerabilities for the Onboarding Automator Services project on branch main. Please investigate.
+            Dependency vulnerabilities:
+            ${{ steps.scan.outputs.summary }}
+          to: ${{ env.TO_EMAIL }}
+          from: ${{ env.FROM_EMAIL }}
